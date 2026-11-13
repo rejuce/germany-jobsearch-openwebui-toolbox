@@ -84,7 +84,7 @@ The Indeed source requires a running FlareSolverr instance (default `http://192.
 If Indeed returns an error, check that FlareSolverr is up:
 
 ```bash
-curl -s http://192.168.0.3:8191/v1/status
+curl -s http://192.168.0.3:8191/
 ```
 
 ### Abstracts (3-sentence summary per listing)

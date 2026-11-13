@@ -9,6 +9,7 @@ requirements: httpx, beautifulsoup4
 
 import asyncio
 import html as html_mod
+import os
 import re
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
@@ -60,7 +61,7 @@ def _fmt_salary(raw: str) -> str:
 class Tools:
     class Valves(BaseModel):
         FLARESOLVERR_URL: str = Field(
-            default="http://192.168.0.3:8191",
+            default_factory=lambda: os.environ.get("FLARESOLVERR_URL", "http://192.168.0.3:8191"),
             description="Base URL of the FlareSolverr proxy (e.g. http://192.168.0.3:8191)",
         )
         INDEED_BASE: str = Field(
