@@ -1,7 +1,7 @@
 """
 title: Indeed DE Job Search
 author: you
-version: 1.0.0
+version: 1.1.0
 license: MIT
 description: Search German job postings on Indeed.de (Cloudflare-protected) via a FlareSolverr proxy and fetch full job details. Requires a running FlareSolverr instance.
 requirements: httpx, beautifulsoup4
@@ -203,6 +203,57 @@ class Tools:
 
         return jobs
 
+    def _pick_description_div(self, soup: BeautifulSoup) -> Optional[object]:
+        """Return the div that holds the actual job description body.
+
+        Indeed wraps the description in a <style> block whose CSS references
+        ".simple-job-description-html". The description itself is NOT the first
+        sibling div after that <style> tag — the first sibling usually only holds
+        meta info (location / working time / contract type). The real body is a
+        later sibling div. We therefore score candidate sibling divs by the amount
+        of text they contain and return the one with the most content, which is
+        robust against structural variations.
+        """
+        for style_tag in soup.find_all("style"):
+            style_text = style_tag.string or style_tag.get_text()
+            if ".simple-job-description-html" in style_text:
+                # Collect the sibling divs that follow this <style> tag.
+                candidates: List[object] = []
+                sib = style_tag.find_next_sibling()
+                while sib is not None:
+                    if getattr(sib, "name", None) == "div":
+                        candidates.append(sib)
+                    sib = sib.find_next_sibling()
+                    if sib and getattr(sib, "name", None) in ("html", "body"):
+                        break
+
+                # Score by amount of meaningful text; ignore tiny meta-only divs.
+                best = None
+                best_score = 0
+                for cand in candidates:
+                    txt = cand.get_text("\n", strip=True)
+                    score = len(txt)
+                    if score > best_score:
+                        best_score = score
+                        best = cand
+                if best is not None:
+                    return best
+
+                # Fallback: first sibling div in the parent if no siblings found.
+                parent = style_tag.parent
+                if parent:
+                    for child in parent.children:
+                        if getattr(child, "name", None) == "div":
+                            return child
+                return None
+
+        # No matching <style> block: fall back to class-based selectors.
+        for cls in ("jobDescription", "simple-job-description", "simplejobdescription"):
+            el = soup.find("div", class_=cls)
+            if el and el.get_text(strip=True):
+                return el
+        return None
+
     def _parse_detail_page(self, html: str, jk: str) -> Dict[str, str]:
         """Parse an Indeed job detail page into a dict with full info."""
         soup = BeautifulSoup(html, "html.parser")
@@ -245,33 +296,13 @@ class Tools:
         dm = re.search(r"vor\s+(\d+)\s+(Tag|Tags|Wochen|Woche|Monaten|Monat|Stunden|Stunde)", body_text)
         job["date"] = f"{dm.group(1)} {dm.group(2)} ago" if dm else ""
 
-        # Description: the description div is the one that follows the
-        # <style> block containing ".simple-job-description-html" CSS.
-        desc_el = None
-        for style_tag in soup.find_all("style"):
-            style_text = style_tag.string or style_tag.get_text()
-            if ".simple-job-description-html" in style_text:
-                # The description div is the next sibling div
-                desc_el = style_tag.find_next_sibling("div")
-                if desc_el is None:
-                    # Sometimes nested: look in the parent
-                    parent = style_tag.parent
-                    if parent:
-                        for child in parent.children:
-                            if getattr(child, "name", None) == "div":
-                                desc_el = child
-                                break
-                break
+        # Description: locate the div that actually contains the job description body.
+        desc_el = self._pick_description_div(soup)
 
         if desc_el:
             job["description"] = _clean_text(desc_el.decode_contents())
         else:
-            # Fallback: look for any div with jobDescription class
-            desc_el2 = soup.find("div", class_=re.compile(r"jobDescription"))
-            if desc_el2:
-                job["description"] = _clean_text(desc_el2.decode_contents())
-            else:
-                job["description"] = ""
+            job["description"] = ""
 
         # Build the Indeed URL
         job["url"] = f"{self.valves.INDEED_BASE}/viewjob?jk={jk}"
